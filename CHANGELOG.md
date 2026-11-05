@@ -4,7 +4,7 @@
 
 ### Assignment 01 baseline
 
-- **Commit:** `TBD after the baseline commit is created`
+- **Commit:** `1c6daf5e6a2066a19bfaf48c61b3b944b148fb4d`
 - **Files:** Existing ExpenseMate source, tests, sample CSV, and baseline report in this folder.
 - **Change type:** Baseline snapshot.
 - **Reason:** Preserve the available Assignment 01 project state before continuing Assignment 02 work.
@@ -13,7 +13,7 @@
 
 ### Assignment 02 preparation
 
-- **Commit:** `TBD after the Assignment 02 documentation commit is created`
+- **Commit:** `pending (this changelog update)`
 - **Files:** `migrations/001_repository_layer.md`, `expense_mate/repositories.py`, repository tests, and this changelog.
 - **Change type:** Refactoring/documentation.
 - **Reason:** Track the repository-layer migration and its verification while preserving compatibility with the Assignment 01 API.

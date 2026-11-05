@@ -13,7 +13,7 @@
 
 ### Assignment 02 preparation
 
-- **Commit:** `pending (this changelog update)`
+- **Commit:** `5ab2780889a53f3c7ee285b454af4676ca384ed3`
 - **Files:** `migrations/001_repository_layer.md`, `expense_mate/repositories.py`, repository tests, and this changelog.
 - **Change type:** Refactoring/documentation.
 - **Reason:** Track the repository-layer migration and its verification while preserving compatibility with the Assignment 01 API.

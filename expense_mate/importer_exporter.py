@@ -1,34 +1,43 @@
 import csv
-from typing import Tuple, List
+from typing import List, Tuple, Union
 
-from .models import Transaction
 from .database import DatabaseManager
+from .models import Transaction
+from .repositories import TransactionRepository
 
 
 class DataPortabilityManager:
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
+    """Handles CSV export and import for transactions via the repository layer."""
+
+    def __init__(
+        self,
+        repository: Union[TransactionRepository, DatabaseManager],
+    ):
+        if isinstance(repository, DatabaseManager):
+            self.db = repository
+            self.repository = TransactionRepository(repository)
+        else:
+            self.repository = repository
+            self.db = repository.database
 
     def export_to_csv(self, file_path: str) -> int:
         try:
-            transactions = self.db.get_all_transactions()
+            transactions = self.repository.get_all()
 
             with open(
                 file_path,
                 mode="w",
                 newline="",
-                encoding="utf-8"
+                encoding="utf-8",
             ) as f:
-
                 writer = csv.writer(f)
-
                 writer.writerow([
                     "ID",
                     "Amount",
                     "Category",
                     "Type",
                     "Date",
-                    "Description"
+                    "Description",
                 ])
 
                 for t in transactions:
@@ -38,7 +47,7 @@ class DataPortabilityManager:
                         t.category,
                         t.trans_type,
                         t.date,
-                        t.description
+                        t.description,
                     ])
 
             return len(transactions)
@@ -50,9 +59,8 @@ class DataPortabilityManager:
 
     def import_from_csv(
         self,
-        file_path: str
+        file_path: str,
     ) -> Tuple[int, int, List[str]]:
-
         success_count, error_count, errors = 0, 0, []
 
         try:
@@ -60,9 +68,8 @@ class DataPortabilityManager:
                 file_path,
                 mode="r",
                 newline="",
-                encoding="utf-8"
+                encoding="utf-8",
             ) as f:
-
                 reader = csv.DictReader(f)
 
                 for line_no, row in enumerate(reader, start=2):
@@ -79,17 +86,15 @@ class DataPortabilityManager:
                             category=category,
                             trans_type=trans_type,
                             date=date,
-                            description=description
+                            description=description,
                         )
 
-                        self.db.insert_transaction(t)
+                        self.repository.add(t)
                         success_count += 1
 
                     except Exception as e:
                         error_count += 1
-                        errors.append(
-                            f"Row {line_no}: {str(e)}"
-                        )
+                        errors.append(f"Row {line_no}: {str(e)}")
 
             return success_count, error_count, errors
 

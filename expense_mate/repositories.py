@@ -52,6 +52,31 @@ class TransactionRepository:
             ).fetchall()
         return [self._to_model(row) for row in rows]
 
+    def get_by_filter(
+        self,
+        trans_type: Optional[str] = None,
+        category: Optional[str] = None,
+        month_year: Optional[str] = None,
+    ) -> List[Transaction]:
+        query = "SELECT * FROM transactions WHERE 1=1"
+        params = []
+
+        if trans_type:
+            query += " AND LOWER(trans_type) = LOWER(?)"
+            params.append(trans_type)
+        if category:
+            query += " AND LOWER(category) = LOWER(?)"
+            params.append(category)
+        if month_year:
+            query += " AND date LIKE ?"
+            params.append(f"{month_year}%")
+
+        query += " ORDER BY date DESC, id DESC"
+
+        with self.database.get_connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [self._to_model(row) for row in rows]
+
     @staticmethod
     def _to_model(row) -> Transaction:
         return Transaction(

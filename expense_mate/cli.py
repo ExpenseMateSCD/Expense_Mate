@@ -1,17 +1,24 @@
 from datetime import datetime
+from typing import Optional
 
-from .database import DatabaseManager
-from .services import ExpenseService
-from .analytics import AnalyticsEngine
-from .importer_exporter import DataPortabilityManager
+from .controllers import ExpenseMateController
 
 
 class ExpenseMateCLI:
-    def __init__(self, db_path: str = "expense_mate.db"):
-        self.db = DatabaseManager(db_path)
-        self.services = ExpenseService(self.db)
-        self.analytics = AnalyticsEngine(self.db)
-        self.portability = DataPortabilityManager(self.db)
+    """Presentation layer (Console UI) for ExpenseMate.
+
+    Interacts with the user, prints menus, formats tables/alerts, and delegates
+    all business requests to ExpenseMateController.
+    """
+
+    def __init__(
+        self,
+        db_path: str = "expense_mate.db",
+        controller: Optional[ExpenseMateController] = None,
+    ):
+        self.controller = controller or ExpenseMateController(db_path=db_path)
+
+    # ---------------- UI Display Helpers ---------------- #
 
     def print_header(self, text: str) -> None:
         print("\n" + "=" * 60)
@@ -31,59 +38,231 @@ class ExpenseMateCLI:
             except ValueError as exc:
                 self.show_error(f"Please enter a valid number. {exc}")
 
-    def validate_transaction_data(self, trans_type: str, amount_text: str, category: str, date_str: str) -> float:
-        errors = []
-        normalized_type = trans_type.strip().lower()
+    # Backward-compatible validation delegations to controller
+    def validate_transaction_data(
+        self,
+        trans_type: str,
+        amount_text: str,
+        category: str,
+        date_str: str,
+    ) -> float:
+        return self.controller.validate_transaction_data(
+            trans_type=trans_type,
+            amount_text=amount_text,
+            category=category,
+            date_str=date_str,
+        )
 
-        if normalized_type not in ("income", "expense"):
-            errors.append("Transaction type must be 'income' or 'expense'.")
+    def validate_currency_data(
+        self,
+        amount_text: str,
+        from_curr: str,
+        to_curr: str,
+    ) -> float:
+        return self.controller.validate_currency_data(
+            amount_text=amount_text,
+            from_curr=from_curr,
+            to_curr=to_curr,
+        )
+
+    # ---------------- Menu Action Handlers ---------------- #
+
+    def _handle_add_transaction(self) -> None:
+        while True:
+            trans_type = input("Type (income / expense): ").strip().lower()
+            if trans_type in ("income", "expense"):
+                break
+            self.show_error("Invalid type. Please enter exactly 'income' or 'expense'.")
+
+        while True:
+            amount_text = input("Amount: ").strip()
+            try:
+                amount = float(amount_text)
+                if amount <= 0:
+                    raise ValueError
+                break
+            except ValueError:
+                self.show_error("Invalid amount. Please enter a positive number greater than 0.")
+
+        while True:
+            category = input("Category (e.g., Food, Salary, Rent): ").strip()
+            if category:
+                break
+            self.show_error("Category cannot be empty. Please enter a category.")
+
+        while True:
+            date_str = input(
+                f"Date (YYYY-MM-DD, Enter for {datetime.today().strftime('%Y-%m-%d')}): "
+            ).strip()
+            if not date_str:
+                date_str = datetime.today().strftime("%Y-%m-%d")
+
+            try:
+                parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+                if parsed_date.strftime("%Y-%m-%d") != date_str:
+                    raise ValueError
+                break
+            except ValueError:
+                self.show_error("Invalid date format. Please use YYYY-MM-DD.")
+
+        desc = input("Description: ").strip()
+
+        result = self.controller.add_transaction(
+            amount=amount,
+            category=category,
+            trans_type=trans_type,
+            date=date_str,
+            description=desc,
+        )
+
+        tid = result["transaction_id"]
+        print(f"\n[+] Successfully recorded transaction #{tid}!")
+
+        alert = result.get("alert")
+        if alert and alert.level in ("WARNING", "CRITICAL"):
+            print(f"\n[ALERT] {alert.message}")
+
+    def _handle_view_transactions(self) -> None:
+        transactions = self.controller.list_transactions()
+        print(
+            f"\n{'ID':<5} | {'Date':<10} | {'Type':<8} | "
+            f"{'Category':<15} | {'Amount':>10} | {'Description'}"
+        )
+        print("-" * 75)
+        for t in transactions:
+            print(
+                f"{t.id:<5} | {t.date:<10} | {t.trans_type:<8} | "
+                f"{t.category:<15} | {t.amount:>10.2f} | "
+                f"{t.description}"
+            )
+
+    def _handle_view_summary(self) -> None:
+        summary = self.controller.get_financial_summary()
+        print(f"\nTotal Income : {summary['total_income']:>12.2f}")
+        print(f"Total Expense: {summary['total_expense']:>12.2f}")
+        print(f"Net Balance  : {summary['net_savings']:>12.2f}")
+
+    def _handle_manage_budgets(self) -> None:
+        my = input(
+            f"Month (YYYY-MM, Enter for {datetime.today().strftime('%Y-%m')}): "
+        ).strip()
+        if not my:
+            my = datetime.today().strftime("%Y-%m")
 
         try:
-            amount = float(amount_text)
-            if amount <= 0:
-                errors.append("Amount must be strictly positive.")
-        except (TypeError, ValueError):
-            errors.append("Amount must be a valid number.")
-            amount = 0.0
+            self.controller.validate_month_format(my)
+        except ValueError as err:
+            self.show_error(str(err))
+            return
 
-        if not category or not category.strip():
-            errors.append("Category cannot be empty.")
+        statuses = self.controller.get_budget_statuses(my)
 
-        try:
-            parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
-            if parsed_date.strftime("%Y-%m-%d") != date_str:
-                raise ValueError
-        except ValueError:
-            errors.append("Date must follow format YYYY-MM-DD.")
+        if not statuses:
+            print(f"\nNo budgets found for {my}.")
+            add_budget = input("Add a budget for this month? (y/n): ").strip().lower()
+            if add_budget == "y":
+                while True:
+                    category = input("Budget category: ").strip()
+                    if category:
+                        break
+                    self.show_error("Category cannot be empty.")
 
-        if errors:
-            raise ValueError("; ".join(errors))
+                while True:
+                    try:
+                        limit = float(input("Monthly limit: ").strip())
+                        if limit <= 0:
+                            raise ValueError
+                        break
+                    except ValueError:
+                        self.show_error("Budget limit must be a positive number.")
 
-        return amount
+                self.controller.set_budget(
+                    category=category,
+                    monthly_limit=limit,
+                    month_year=my,
+                )
+                print(f"\n[+] Budget added for {category} in {my}.")
+                statuses = self.controller.get_budget_statuses(my)
 
-    def validate_currency_data(self, amount_text: str, from_curr: str, to_curr: str) -> float:
-        errors = []
+        if statuses:
+            for st in statuses:
+                print(
+                    f"[{st.level}] {st.category}: "
+                    f"Spent {st.spent:.2f}/{st.limit:.2f} "
+                    f"({st.percentage:.1f}%)"
+                )
 
-        try:
-            amount = float(amount_text)
-            if amount < 0:
-                errors.append("Amount cannot be negative.")
-        except (TypeError, ValueError):
-            errors.append("Amount must be a valid number.")
-            amount = 0.0
+    def _handle_visual_analytics(self) -> None:
+        month_filter = input(
+            "Month filter (YYYY-MM, press Enter for all): "
+        ).strip()
+        if month_filter:
+            try:
+                self.controller.validate_month_format(month_filter)
+            except ValueError as err:
+                self.show_error(str(err))
+                return
 
-        if not from_curr or not from_curr.strip():
-            errors.append("From currency cannot be empty.")
+        analytics_res = self.controller.get_category_analytics(
+            trans_type="expense",
+            month_year=month_filter or None,
+        )
+        print(analytics_res["chart"])
 
-        if not to_curr or not to_curr.strip():
-            errors.append("To currency cannot be empty.")
+    def _handle_monthly_trends(self) -> None:
+        trends = self.controller.get_monthly_trends()
+        print(
+            f"\n{'Month':<10} | {'Income':>10} | "
+            f"{'Expense':>10} | {'Savings':>10}"
+        )
+        print("-" * 50)
+        for my, val in trends.items():
+            print(
+                f"{my:<10} | {val['income']:>10.2f} | "
+                f"{val['expense']:>10.2f} | "
+                f"{val['savings']:>10.2f}"
+            )
 
-        if errors:
-            raise ValueError("; ".join(errors))
+    def _handle_export_csv(self) -> None:
+        count = self.controller.export_csv("expenses_export.csv")
+        print(f"\n[+] Exported {count} transactions to 'expenses_export.csv'.")
 
-        return amount
+    def _handle_import_csv(self) -> None:
+        fn = input("CSV Path: ").strip()
+        if not fn:
+            raise ValueError("CSV path cannot be empty.")
+        s, e, _ = self.controller.import_csv(fn)
+        print(f"\n[+] Imported: {s} success, {e} errors.")
+
+    def _handle_currency_converter(self) -> None:
+        amount_text = input("Amount: ").strip()
+        f_c = input("From Currency: ").strip().upper()
+        t_c = input("To Currency: ").strip().upper()
+
+        amt = self.validate_currency_data(amount_text, f_c, t_c)
+        converted = self.controller.convert_currency(amt, f_c, t_c)
+        print(f"\n[+] Converted: {converted}")
+
+    def _handle_backup_database(self) -> None:
+        backup_path = self.controller.backup_database()
+        print(f"\n[+] Backup saved to: {backup_path}")
+
+    # ---------------- Main Dispatcher Loop ---------------- #
 
     def run(self) -> None:
+        handlers = {
+            "1": self._handle_add_transaction,
+            "2": self._handle_view_transactions,
+            "3": self._handle_view_summary,
+            "4": self._handle_manage_budgets,
+            "5": self._handle_visual_analytics,
+            "6": self._handle_monthly_trends,
+            "7": self._handle_export_csv,
+            "8": self._handle_import_csv,
+            "9": self._handle_currency_converter,
+            "10": self._handle_backup_database,
+        }
+
         while True:
             try:
                 self.print_header("EXPENSEMATE - PERSONAL EXPENSE MANAGER")
@@ -102,351 +281,23 @@ class ExpenseMateCLI:
 
                 choice = input("Enter option [0-10]: ").strip()
 
-                if choice == "1":
-                    try:
-                        while True:
-                            trans_type = input("Type (income / expense): ").strip().lower()
-
-                            if trans_type in ("income", "expense"):
-                                break
-
-                            self.show_error(
-                                "Invalid type. Please enter exactly 'income' or 'expense'."
-                            )
-
-                        while True:
-                            amount_text = input("Amount: ").strip()
-
-                            try:
-                                amount = float(amount_text)
-
-                                if amount <= 0:
-                                    raise ValueError
-
-                                break
-
-                            except ValueError:
-                                self.show_error(
-                                    "Invalid amount. Please enter a positive number greater than 0."
-                                )
-
-                        while True:
-                            category = input(
-                                "Category (e.g., Food, Salary, Rent): "
-                            ).strip()
-
-                            if category:
-                                break
-
-                            self.show_error(
-                                "Category cannot be empty. Please enter a category."
-                            )
-
-                        while True:
-                            date_str = input(
-                                f"Date (YYYY-MM-DD, Enter for {datetime.today().strftime('%Y-%m-%d')}): "
-                            ).strip()
-
-                            if not date_str:
-                                date_str = datetime.today().strftime("%Y-%m-%d")
-
-                            try:
-                                parsed_date = datetime.strptime(
-                                    date_str, "%Y-%m-%d"
-                                )
-
-                                if parsed_date.strftime("%Y-%m-%d") != date_str:
-                                    raise ValueError
-
-                                break
-
-                            except ValueError:
-                                self.show_error(
-                                    "Invalid date format. Please use YYYY-MM-DD."
-                                )
-
-                        desc = input("Description: ").strip()
-
-                        tid = self.services.add_transaction(
-                            amount,
-                            category,
-                            trans_type,
-                            date_str,
-                            desc
-                        )
-
-                        print(
-                            f"\n[+] Successfully recorded transaction #{tid}!"
-                        )
-
-                        if trans_type == "expense":
-                            status = self.services.check_budget_status(
-                                category,
-                                date_str[:7]
-                            )
-
-                            if status and status.level in ("WARNING", "CRITICAL"):
-                                print(f"\n[ALERT] {status.message}")
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "2":
-                    try:
-                        transactions = self.services.list_transactions()
-
-                        print(
-                            f"\n{'ID':<5} | {'Date':<10} | {'Type':<8} | "
-                            f"{'Category':<15} | {'Amount':>10} | {'Description'}"
-                        )
-
-                        print("-" * 75)
-
-                        for t in transactions:
-                            print(
-                                f"{t.id:<5} | {t.date:<10} | {t.trans_type:<8} | "
-                                f"{t.category:<15} | {t.amount:>10.2f} | "
-                                f"{t.description}"
-                            )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "3":
-                    try:
-                        summary = self.services.get_net_summary()
-
-                        print(
-                            f"\nTotal Income : {summary['total_income']:>12.2f}"
-                        )
-                        print(
-                            f"Total Expense: {summary['total_expense']:>12.2f}"
-                        )
-                        print(
-                            f"Net Balance  : {summary['net_savings']:>12.2f}"
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "4":
-                    try:
-                        my = input(
-                            f"Month (YYYY-MM, Enter for {datetime.today().strftime('%Y-%m')}): "
-                        ).strip()
-
-                        if not my:
-                            my = datetime.today().strftime("%Y-%m")
-
-                        try:
-                            parsed_month = datetime.strptime(my, "%Y-%m")
-
-                            if parsed_month.strftime("%Y-%m") != my:
-                                raise ValueError
-
-                        except ValueError:
-                            self.show_error(
-                                "Invalid month format. Please use YYYY-MM."
-                            )
-                            continue
-
-                        statuses = self.services.get_all_budget_statuses(my)
-
-                        if not statuses:
-                            print(f"\nNo budgets found for {my}.")
-
-                            add_budget = input(
-                                "Add a budget for this month? (y/n): "
-                            ).strip().lower()
-
-                            if add_budget == "y":
-                                while True:
-                                    category = input(
-                                        "Budget category: "
-                                    ).strip()
-
-                                    if category:
-                                        break
-
-                                    self.show_error(
-                                        "Category cannot be empty."
-                                    )
-
-                                while True:
-                                    try:
-                                        limit = float(
-                                            input("Monthly limit: ").strip()
-                                        )
-
-                                        if limit <= 0:
-                                            raise ValueError
-
-                                        break
-
-                                    except ValueError:
-                                        self.show_error(
-                                            "Budget limit must be a positive number."
-                                        )
-
-                                self.services.set_budget(
-                                    category,
-                                    limit,
-                                    my
-                                )
-
-                                print(
-                                    f"\n[+] Budget added for {category} in {my}."
-                                )
-
-                                statuses = self.services.get_all_budget_statuses(my)
-
-                        if statuses:
-                            for st in statuses:
-                                print(
-                                    f"[{st.level}] {st.category}: "
-                                    f"Spent {st.spent:.2f}/{st.limit:.2f} "
-                                    f"({st.percentage:.1f}%)"
-                                )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "5":
-                    try:
-                        month_filter = input(
-                            "Month filter (YYYY-MM, press Enter for all): "
-                        ).strip()
-
-                        if month_filter:
-                            try:
-                                parsed_month = datetime.strptime(
-                                    month_filter,
-                                    "%Y-%m"
-                                )
-
-                                if parsed_month.strftime("%Y-%m") != month_filter:
-                                    raise ValueError
-
-                            except ValueError:
-                                self.show_error(
-                                    "Invalid month format. Please use YYYY-MM."
-                                )
-                                continue
-
-                        breakdown = self.analytics.get_category_breakdown(
-                            "expense",
-                            month_filter or None
-                        )
-
-                        print(
-                            self.analytics.generate_ascii_bar_chart(
-                                breakdown,
-                                title="Expense Category Breakdown"
-                            )
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "6":
-                    try:
-                        trends = self.analytics.get_monthly_trends()
-
-                        print(
-                            f"\n{'Month':<10} | {'Income':>10} | "
-                            f"{'Expense':>10} | {'Savings':>10}"
-                        )
-
-                        print("-" * 50)
-
-                        for my, val in trends.items():
-                            print(
-                                f"{my:<10} | {val['income']:>10.2f} | "
-                                f"{val['expense']:>10.2f} | "
-                                f"{val['savings']:>10.2f}"
-                            )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "7":
-                    try:
-                        count = self.portability.export_to_csv(
-                            "expenses_export.csv"
-                        )
-
-                        print(
-                            f"\n[+] Exported {count} transactions "
-                            f"to 'expenses_export.csv'."
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "8":
-                    try:
-                        fn = input("CSV Path: ").strip()
-
-                        if not fn:
-                            raise ValueError("CSV path cannot be empty.")
-
-                        s, e, _ = self.portability.import_from_csv(fn)
-
-                        print(
-                            f"\n[+] Imported: {s} success, {e} errors."
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "9":
-                    try:
-                        amount_text = input("Amount: ").strip()
-                        f_c = input("From Currency: ").strip().upper()
-                        t_c = input("To Currency: ").strip().upper()
-
-                        amt = self.validate_currency_data(
-                            amount_text,
-                            f_c,
-                            t_c
-                        )
-
-                        print(
-                            f"\n[+] Converted: "
-                            f"{self.services.convert_amount(amt, f_c, t_c)}"
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "10":
-                    try:
-                        backup_path = self.services.create_database_backup()
-
-                        print(
-                            f"\n[+] Backup saved to: {backup_path}"
-                        )
-
-                    except Exception as e:
-                        self.show_error(e)
-
-                elif choice == "0":
+                if choice == "0":
                     print("\nGoodbye!\n")
                     break
 
+                handler = handlers.get(choice)
+                if handler:
+                    try:
+                        handler()
+                    except Exception as err:
+                        self.show_error(str(err))
                 else:
                     self.show_error(
                         "Invalid option selected. Please choose from 0 to 10."
                     )
 
             except KeyboardInterrupt:
-                print(
-                    "\nProgram interrupted. Exiting gracefully.\n"
-                )
+                print("\nProgram interrupted. Exiting gracefully.\n")
                 break
-
             except Exception as e:
-                self.show_error(
-                    f"Unexpected problem: {e}"
-                )
-
+                self.show_error(f"Unexpected problem: {e}")
